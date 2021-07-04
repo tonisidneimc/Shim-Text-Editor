@@ -613,7 +613,7 @@ void editorUpdateRowOffset() {
   //E.screencols -= (E.row_num_offset + 1);
 }
 
-void editorInsertRow(int at, char* s, size_t len) { 
+void editorInsertRow(int at, char* s, size_t len, int leading_spaces) { 
   if(at < 0 || at > E.numrows) return;
 
   E.row = realloc(E.row, sizeof(E_ROW) * (E.numrows + 1));
@@ -622,10 +622,11 @@ void editorInsertRow(int at, char* s, size_t len) {
 
   E.row[at].idx = at;
 
-  E.row[at].size = len;
-  E.row[at].chars = malloc(len + 1);
-  memcpy(E.row[at].chars, s, len);
-  E.row[at].chars[len] = '\0';
+  E.row[at].size = len + leading_spaces;
+  E.row[at].chars = malloc(len + leading_spaces + 1);
+  memset(E.row[at].chars, ' ', leading_spaces);
+  memcpy(E.row[at].chars + leading_spaces, s, len);
+  E.row[at].chars[len + leading_spaces] = '\0';
 
   E.row[at].rsize = 0;
   E.row[at].render = NULL;
@@ -688,29 +689,38 @@ void editorRowDelChar(E_ROW* row, int at) {
 void editorInsertChar(int c) {
   if(E.curr_y == E.numrows) {
     // the cursor is on the tilde line after EOF
-    editorInsertRow(E.numrows, "", 0);
+    editorInsertRow(E.numrows, "", 0, 0);
   }
   // insert char at the current cursor position
   editorRowInsertChar(&E.row[E.curr_y], E.curr_x, c);
   E.curr_x++;
 }
 
+int getLeadingSpaces(int at) {
+  int count;
+  for(count = 0; E.row[at].render[count] == ' '; ++count);
+  
+  return count;
+}
+
 void editorInsertNewLine() {
+  int leading_spaces = getLeadingSpaces(E.curr_y);
+
   if(E.curr_x == 0) {
     // insert an empty line at curr_y
-    editorInsertRow(E.curr_y, "", 0);
+    editorInsertRow(E.curr_y, "", 0, leading_spaces);
   } else {
     // split line at curr_x
     E_ROW* row = &E.row[E.curr_y];
     // create a new row after the current one, with the characters to the right of the cursor
-    editorInsertRow(E.curr_y + 1, &row->chars[E.curr_x], row->size - E.curr_x);
+    editorInsertRow(E.curr_y + 1, &row->chars[E.curr_x], row->size - E.curr_x, leading_spaces);
     row = &E.row[E.curr_y];
     row->size = E.curr_x; // truncate the current line
     row->chars[row->size] = '\0';
     editorUpdateRow(row);
   }
   E.curr_y++;
-  E.curr_x = 0;
+  E.curr_x = leading_spaces;
 }
 
 void editorDelChar() {
@@ -768,7 +778,7 @@ void editorOpen(const char* filename) {
     while(linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
       linelen--;
     }
-    editorInsertRow(E.numrows, line, linelen);
+    editorInsertRow(E.numrows, line, linelen, 0);
   }
   editorUpdateRowOffset();
   free(line); fclose(fp);
