@@ -14,6 +14,7 @@
 #include <termios.h> 
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 
 #define SHIM_VERSION "0.0.1"
 #define SHIM_TAB_STOP 8 // tabulation length
@@ -206,12 +207,12 @@ void enableRawMode() {
   if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
 
-int editorReadKey() {
+int editorReadKey(int fd) {
   int nread;
   char c;
 
   // wait until a keypress occurr
-  while((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+  while((nread = read(fd, &c, 1)) != 1) {
     if(nread == -1 && errno != EAGAIN) die("read");
   }
   
@@ -219,12 +220,12 @@ int editorReadKey() {
     // parse escape sequence
     char seq[3];
     
-    if(read(STDIN_FILENO, &seq[0], 1) != 1) return c;
-    if(read(STDIN_FILENO, &seq[1], 1) != 1) return c;
+    if(read(fd, &seq[0], 1) != 1) return c;
+    if(read(fd, &seq[1], 1) != 1) return c;
 
     if(seq[0] == '[') { 
       if(seq[1] >= '0' && seq[1] <= '9') {
-        if(read(STDIN_FILENO, &seq[2], 1) != 1) return c;
+        if(read(fd, &seq[2], 1) != 1) return c;
         if(seq[2] == '~') {
           switch(seq[1]) {
             case '1' : return HOME_KEY;
@@ -888,7 +889,7 @@ char* editorPrompt(char* prompt, void (*callback)(char*, int)) {
     editorSetStatusMessage(prompt, buf);
     editorRefreshScreen();
 
-    int c = editorReadKey();
+    int c = editorReadKey(STDIN_FILENO);
     if(c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
       if(buflen != 0) buf[--buflen] = '\0'; // delete last inserted character
     }
@@ -951,9 +952,9 @@ void editorMoveCursor(int key) {
   if(E.curr_x > rowlen) E.curr_x = rowlen;
 }
 
-void editorProcessKeypress() {
+void editorProcessKeypress(int fd) {
   static int quit_times = SHIM_QUIT_TIMES;
-  int c = editorReadKey();
+  int c = editorReadKey(fd);
 
   // handle a keypress
   switch(c) {
@@ -1227,6 +1228,18 @@ void editorSetStatusMessage(const char* fmt, ...){
   E.statusmsg_time = time(NULL);
 }
 
+void updateWindowSize() {
+  if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
+  E.screenrows -= 2; // reserve the two last lines for the status bar and the message bar
+}
+
+void handleSigWinCh(int sig) {
+  updateWindowSize();
+  if(E.curr_y > E.screenrows) E.curr_y = E.screenrows - 1;
+  if(E.curr_x > E.screencols) E.curr_x = E.screencols - 1;
+  editorRefreshScreen();
+}
+
 void initEditor() {
   E.curr_x = E.curr_y = 0;
   E.rowoff = E.coloff = 0;
@@ -1239,8 +1252,8 @@ void initEditor() {
   E.statusmsg_time = 0;
   E.syntax = NULL;
   
-  if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
-  E.screenrows -= 2; // reserve the two last lines for the status bar and the message bar
+  updateWindowSize();
+  signal(SIGWINCH, handleSigWinCh);
 }
 
 int main(int argc, char* argv[]) {
@@ -1255,7 +1268,7 @@ int main(int argc, char* argv[]) {
 
   while(1) {
     editorRefreshScreen();
-    editorProcessKeypress();
+    editorProcessKeypress(STDIN_FILENO);
   }
 
   return 0;
