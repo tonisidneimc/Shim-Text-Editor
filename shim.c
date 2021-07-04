@@ -92,6 +92,7 @@ struct editorConfig {
   int screenrows;     // screen height
   int screencols;     // screen width
   int numrows;        // number of rows in the source file
+  int row_num_offset;
   E_ROW* row;
   int dirty;          // tell if a text buffer has been modified
   char* filename;
@@ -539,6 +540,16 @@ void editorSelectSyntaxHighlight() {
   }
 }
 
+int ndigits(int num) {
+  int d = 0;
+  
+  do {
+    ++d;
+  } while(num /= 10);
+  
+  return d; 
+}
+
 int editorRowCxtoRx(E_ROW* row, int cx) {
   // convert a chars index into a render index
   int j, rx = 0;
@@ -596,6 +607,12 @@ void editorUpdateRow(E_ROW* row) {
   editorUpdateSyntax(row);
 }
 
+void editorUpdateRowOffset() {
+  //E.screencols += (E.row_num_offset + 1);
+  E.row_num_offset = ndigits(E.numrows);
+  //E.screencols -= (E.row_num_offset + 1);
+}
+
 void editorInsertRow(int at, char* s, size_t len) { 
   if(at < 0 || at > E.numrows) return;
 
@@ -617,6 +634,7 @@ void editorInsertRow(int at, char* s, size_t len) {
   editorUpdateRow(&E.row[at]);
 
   E.numrows++;
+  editorUpdateRowOffset();
   E.dirty++;
 }
 
@@ -633,6 +651,7 @@ void editorDelRow(int at) {
   memmove(&E.row[at], &E.row[at + 1], sizeof(E_ROW) * (E.numrows - at - 1));
   for(int j = at; j < E.numrows - 1; j++) E.row[j].idx--;
   E.numrows--;
+  editorUpdateRowOffset();
   E.dirty++;
 }
 
@@ -750,7 +769,8 @@ void editorOpen(const char* filename) {
       linelen--;
     }
     editorInsertRow(E.numrows, line, linelen);
-  } 
+  }
+  editorUpdateRowOffset();
   free(line); fclose(fp);
   E.dirty = 0;
 }
@@ -1054,6 +1074,9 @@ void editorScroll() {
   if(E.render_x >= E.coloff + E.screencols) {
     E.coloff = E.render_x - E.screencols + 1;
   }
+  /*if(E.render_x >= E.coloff - E.row_num_offset + E.screencols) {
+    E.coloff = E.render_x - E.screencols + E.row_num_offset + 1;
+  }*/
 }
 
 void editorDrawRows(A_BUF* ab) {
@@ -1081,10 +1104,14 @@ void editorDrawRows(A_BUF* ab) {
       }
     } else {
       // drawing a row that is part of the text buffer
+      char linenum[32];
+      int lnlen = snprintf(linenum, sizeof(linenum), "%*d ", E.row_num_offset, filerow + 1);
+      abAppend(ab, linenum, lnlen);
+      
       // subtract the number of characters that are to the left of the offset
       int j, len = E.row[filerow].rsize - E.coloff;
       if(len < 0) len = 0; // scrolled horizontally past the end of the line
-      if(len > E.screencols) len = E.screencols; // truncate the line
+      if(len > (E.screencols - E.row_num_offset + 1)) len = E.screencols - E.row_num_offset - 1; // truncate the line
 
       char* c = &E.row[filerow].render[E.coloff]; // get the render array
       unsigned char* hl = &E.row[filerow].hl[E.coloff]; // get the highlight array
@@ -1210,7 +1237,7 @@ void editorRefreshScreen() {
   // point curr_x and curr_y back to its position on the screen
   // update the cursor position
   snprintf(buffer, sizeof(buffer), "\x1b[%d;%dH", (E.curr_y - E.rowoff) + 1, 
-                                                  (E.render_x - E.coloff) + 1);
+                                                  (E.render_x - E.coloff + E.row_num_offset + 1) + 1);
   abAppend(&ab, buffer, strlen(buffer));  
 
   // escape sequence to show/set(h) the cursor after refreshing the screen 
@@ -1235,8 +1262,9 @@ void updateWindowSize() {
 
 void handleSigWinCh(int sig) {
   updateWindowSize();
-  if(E.curr_y > E.screenrows) E.curr_y = E.screenrows - 1;
-  if(E.curr_x > E.screencols) E.curr_x = E.screencols - 1;
+  if(E.curr_y > E.screenrows + E.rowoff - 1) E.curr_y = E.screenrows + E.rowoff - 1;
+  if(E.curr_x > (E.screencols + E.coloff - (E.row_num_offset + 1) - 1)) 
+    E.curr_x = E.screencols + E.coloff - (E.row_num_offset + 1) - 1;
   editorRefreshScreen();
 }
 
@@ -1251,6 +1279,7 @@ void initEditor() {
   E.statusmsg[0] = '\0';
   E.statusmsg_time = 0;
   E.syntax = NULL;
+  E.row_num_offset = 0;
   
   updateWindowSize();
   signal(SIGWINCH, handleSigWinCh);
