@@ -110,7 +110,7 @@ char* C_HL_keywords[] = {
   "struct", "union", "typedef", "enum", "class", "case", "default", "sizeof",
   
   "int|", "long|", "double|", "float|", "short|", "char|", "unsigned|", "signed|", // types
-  "const|", "static|", "void|", "auto|", "bool|", "register|", "extern|", "volatile|"
+  "const|", "static|", "void|", "auto|", "bool|", "register|", "extern|", "volatile|",
   "size_t|", "ptrdiff_t|", NULL
 };
 
@@ -1081,12 +1081,9 @@ void editorScroll() {
     E.coloff = E.render_x;
   }
   // checks if the cursor is past the right of the visible window
-  if(E.render_x >= E.coloff + E.screencols) {
-    E.coloff = E.render_x - E.screencols + 1;
+  if(E.render_x >= E.coloff - E.row_num_offset + E.screencols - 1) {
+    E.coloff = E.render_x - E.screencols + E.row_num_offset + 2;
   }
-  /*if(E.render_x >= E.coloff - E.row_num_offset + E.screencols) {
-    E.coloff = E.render_x - E.screencols + E.row_num_offset + 1;
-  }*/
 }
 
 void editorDrawRows(A_BUF* ab) {
@@ -1121,7 +1118,7 @@ void editorDrawRows(A_BUF* ab) {
       // subtract the number of characters that are to the left of the offset
       int j, len = E.row[filerow].rsize - E.coloff;
       if(len < 0) len = 0; // scrolled horizontally past the end of the line
-      if(len > (E.screencols - E.row_num_offset + 1)) len = E.screencols - E.row_num_offset - 1; // truncate the line
+      if(len > E.screencols - (E.row_num_offset + 1)) len = E.screencols - E.row_num_offset - 2; // truncate the line
 
       char* c = &E.row[filerow].render[E.coloff]; // get the render array
       unsigned char* hl = &E.row[filerow].hl[E.coloff]; // get the highlight array
@@ -1301,6 +1298,7 @@ int main(int argc, char* argv[]) {
 
   if(argc >= 2) {
     editorOpen(argv[1]);
+    updateWindowSize();
   }
 
   editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
