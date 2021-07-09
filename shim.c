@@ -301,10 +301,14 @@ int getWindowSize(int* rows, int *cols) {
   } 
 }
 
+int is_bracket(int c) {
+  return strchr("()[]{}", c) != NULL;
+}
+
 int is_separator(int c) {
   // checks if c is a separator character or not
   // strchr looks for c in the given string and return a pointer to the matching character
-  return isspace(c) || c == '\0' || strchr(",.()+-/*!?=~%<>[]{}:;&|^\"\'\\", c) != NULL;
+  return isspace(c) || is_bracket(c) || c == '\0' || strchr(",.+-/*!?=~%<>:;&|^\"\'\\", c) != NULL;
 }
 
 void editorUpdateSyntax(E_ROW* row) {
@@ -656,13 +660,136 @@ void editorDelRow(int at) {
   E.dirty++;
 }
 
+void editorCheckBounds(int *row, int* col) {
+  if(*row < 0) *row = 0;
+  else if(*row >= E.numrows) *row = E.numrows - 1;
+  
+  if(*col < 0) *col = 0;
+  else if(*col >= E.row[*row].rsize) *col = E.row[*row].rsize - 1;
+}
+
+int editorMatchClosingCallback() {
+  
+  static int saved_hl_open_row = 0;
+  static int saved_hl_open_col = 0;
+  static int saved_hl_closing_row = 0;
+  static int saved_hl_closing_col = 0;
+  
+  static char has_saved_hl = 0;
+
+  if(has_saved_hl) {
+    int restore_open = 1, restore_closing = 1;
+    // check if the state of the buffer has changed since the last saving
+    // checking for the open bracket character
+    if(saved_hl_open_row >= E.numrows || // has deleted the line
+       saved_hl_open_col >= E.row[saved_hl_open_row].rsize || // has deleted the char
+       E.row[saved_hl_open_row].hl[saved_hl_open_col] != HL_MATCH) // other char in the place 
+      restore_open = 0;
+    
+    if(restore_open) E.row[saved_hl_open_row].hl[saved_hl_open_col] = HL_NORMAL;
+    
+    // checking for the closing bracket character
+    if(saved_hl_closing_row >= E.numrows || // has deleted the line
+       saved_hl_closing_col >= E.row[saved_hl_closing_row].rsize || // has deleted the char
+       E.row[saved_hl_closing_row].hl[saved_hl_closing_col] != HL_MATCH) // other char in the place 
+      restore_closing = 0;
+    
+    if(restore_closing) E.row[saved_hl_closing_row].hl[saved_hl_closing_col] = HL_NORMAL;
+    
+    has_saved_hl = 0;
+  }
+
+  int x = E.curr_x, y = E.curr_y;
+  editorCheckBounds(&y, &x);
+  
+  if(y < E.numrows && E.row[y].rsize == 0) return 0; // strchr fails if current = '\0'
+  
+  char current = E.row[y].render[x];
+
+  if(!is_bracket(current)) return 0;
+
+  int dir = 1; // 1 for searching forward and -1 for searching backward
+  int closing = 0;
+  int inner = -1;
+
+  if(current == '(') {
+    closing = current + 1; // ')'
+    dir = 1;
+  } else if(current == '{' || current == '[') {
+    closing = current + 2; // '}' or ']'
+    dir = 1;
+  } else if(current == ')') {
+    closing = current - 1; // '('
+    dir = -1;
+  } else if(current == '}' || current == ']') {
+    closing = current - 2; // '{' or '['
+    dir = -1;
+  }
+  
+  int current_row = E.curr_y;
+  int i = x;
+ 
+  while(1) {
+    // upper and lower limits of the file
+    if(current_row < 0 || current_row >= E.numrows - 1) break;
+ 
+    E_ROW* row = &E.row[current_row];
+    // check if the closing character is in the string
+    
+    char *match = NULL;
+    //char* match = strchr(row->render, closing);
+    
+    if(current_row != E.curr_y) {
+      if(dir == -1) i = row->rsize - 1;
+      else if(dir == 1) i = 0; 
+    }
+    
+    while(i >= 0 && i < row->rsize) {
+      if(!inner && row->render[i] == closing) {
+        match = &row->render[i];
+        break;
+      }
+      if(row->render[i] == current) ++inner;
+      else if(row->render[i] == closing) --inner;
+      
+      i += dir;
+    }
+    
+    if(match && !inner) {
+  
+      has_saved_hl = 1;
+    
+      saved_hl_open_row = y;
+      saved_hl_open_col = x;
+      saved_hl_closing_row = current_row;
+      saved_hl_closing_col = match - row->render;
+      
+      E.row[y].hl[x] = HL_MATCH; // opening
+      row->hl[match - row->render] = HL_MATCH; // closing
+      
+      return 1;
+    }
+    current_row += dir;
+  }
+  return 0;
+}
+
 void editorRowInsertChar(E_ROW* row, int at, char c) {
   if(at < 0 || at > row->size) at = row->size;
+  
+  char closing = 0;
+  if(c == '(') closing = c + 1;
+  else if(c == '{' || c == '[') closing = c + 2;
+  else if(c == '"' || c == '\'') closing = c;
+  
+  int clen = closing ? 2 : 1;
 
-  row->chars = realloc(row->chars, row->size + 2);
-  memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
-  row->size++;
+  row->chars = realloc(row->chars, row->size + clen + 1);
+  if(!row->chars) die("rowInsertChar");
+  memmove(&row->chars[at + clen], &row->chars[at], row->size - at + clen);
+  row->size += clen;
   row->chars[at] = c;
+  if(closing) row->chars[at + 1] = closing;
   editorUpdateRow(row);
   E.dirty++;
 }
@@ -694,12 +821,19 @@ void editorInsertChar(int c) {
   // insert char at the current cursor position
   editorRowInsertChar(&E.row[E.curr_y], E.curr_x, c);
   E.curr_x++;
+  
+  editorMatchClosingCallback();
 }
 
 int getLeadingSpaces(int at) {
-  int count;
-  for(count = 0; E.row[at].render[count] == ' '; ++count);
+  if(at < 0 || at >= E.numrows) return 0;
   
+  int count = 0;
+  
+  while(count < E.row[at].rsize) {
+    if(E.row[at].render[count] != ' ') break;
+    count++;
+  }
   return count;
 }
 
@@ -721,6 +855,8 @@ void editorInsertNewLine() {
   }
   E.curr_y++;
   E.curr_x = leading_spaces;
+  
+  editorMatchClosingCallback();
 }
 
 void editorDelChar() {
@@ -737,6 +873,7 @@ void editorDelChar() {
     editorDelRow(E.curr_y);
     E.curr_y--;
   }
+  editorMatchClosingCallback();
 }
 
 char* editorRowsToString(int* buflen) {
@@ -980,6 +1117,8 @@ void editorMoveCursor(int key) {
   int rowlen = row ? row->size : 0;
   // set curr_x to the end of the line if it is to the right of the end of that line
   if(E.curr_x > rowlen) E.curr_x = rowlen;
+  
+  editorMatchClosingCallback();
 }
 
 void editorProcessKeypress(int fd) {
